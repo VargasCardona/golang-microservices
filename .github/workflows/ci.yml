@@ -65,7 +65,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          SANITIZED_REPO=$(echo "${{ github.repository }}" | sed 's/-/\_/g')
+          SANITIZED_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | sed 's/-/\_/g')
           IMAGE=ghcr.io/$SANITIZED_REPO:${{ github.ref_name }}
           docker build -t $IMAGE .
 
@@ -108,7 +108,7 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          SANITIZED_REPO=$(echo "${{ github.repository }}" | sed 's/-/\_/g')
+          SANITIZED_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | sed 's/-/\_/g')
           IMAGE=ghcr.io/$SANITIZED_REPO:${{ steps.tag.outputs.version }}
           docker build -t $IMAGE .
           docker push $IMAGE
