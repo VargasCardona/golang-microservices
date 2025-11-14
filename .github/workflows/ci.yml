@@ -1,4 +1,4 @@
-name: CI/CD – Test, Scan, Build & Release
+name: CI/CD – Multi-CRUD Dummy Images & Releases
 
 on:
   push:
@@ -10,9 +10,19 @@ on:
 permissions:
   contents: write
   packages: write
-  security-events: write  # Required for SARIF upload to code scanning
+  security-events: write   # needed for SARIF upload (v4)
+
+# ---------------------------------------------------------------------------
+# Helper matrix – 4 dummy services
+# ---------------------------------------------------------------------------
+defaults:
+  run:
+    shell: bash
 
 jobs:
+  # --------------------------------------------------------------
+  # 1. Run your existing tests (unchanged)
+  # --------------------------------------------------------------
   test:
     name: Run Tests
     runs-on: ubuntu-latest
@@ -55,49 +65,57 @@ jobs:
         run: |
           go test -v ./...
 
+  # --------------------------------------------------------------
+  # 2. Trivy scan (one image is enough – we reuse the "create" image)
+  # --------------------------------------------------------------
   trivy-scan:
-    name: Trivy Security Scan
+    name: Trivy Security Scan (create image)
     needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set sanitized image name
+      - name: Set sanitized image name (create)
         id: image
         run: |
           REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | sed 's/-/\_/g')
           TAG=${{ github.ref_name }}
-          IMAGE_NAME="ghcr.io/$REPO:$TAG"
-          echo "image=$IMAGE_NAME" >> $GITHUB_OUTPUT
-          echo "Scanning image: $IMAGE_NAME"
+          IMAGE="ghcr.io/$REPO/create:$TAG"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
-      - name: Build Docker image
+      - name: Build Docker image (create)
         run: |
           docker build -t ${{ steps.image.outputs.image }} .
 
       - name: Run Trivy (non-blocking)
         uses: aquasecurity/trivy-action@master
-        continue-on-error: true          # keep workflow alive
+        continue-on-error: true
         with:
           image-ref: ${{ steps.image.outputs.image }}
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'   # report everything
-          exit-code: '0'                 # never fail the step
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
+          exit-code: '0'
           ignore-unfixed: true
           vuln-type: 'os,library'
 
       - name: Upload results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4  # Updated to v4 (v3 deprecated Dec 2026)
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
 
-  build-and-release:
-    name: Build & Release Docker Image
+  # --------------------------------------------------------------
+  # 3. Build, push & release **4 dummy images** in parallel
+  # --------------------------------------------------------------
+  build-release-crud:
+    name: Build, Push & Release ${{ matrix.service }}
     needs: trivy-scan
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      matrix:
+        service: [create, read, update, delete]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -108,14 +126,14 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Set sanitized image name
+      - name: Set sanitized image name for ${{ matrix.service }}
         id: image
         run: |
           REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | sed 's/-/\_/g')
           VERSION=${{ steps.tag.outputs.version }}
-          IMAGE_NAME="ghcr.io/$REPO:$VERSION"
-          echo "image=$IMAGE_NAME" >> $GITHUB_OUTPUT
-          echo "Building and pushing: $IMAGE_NAME"
+          IMAGE="ghcr.io/$REPO/${{ matrix.service }}:$VERSION"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          echo "Building/pushing: $IMAGE"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -124,16 +142,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Build & push Docker image
         run: |
           docker build -t ${{ steps.image.outputs.image }} .
           docker push ${{ steps.image.outputs.image }}
           echo "Pushed ${{ steps.image.outputs.image }}"
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release for ${{ matrix.service }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.version }}
-          name: Release ${{ steps.tag.outputs.version }}
+          tag_name: ${{ steps.tag.outputs.version }}-${{ matrix.service }}
+          name: Release ${{ steps.tag.outputs.version }} – ${{ matrix.service }}
           draft: false
           prerelease: false
+          # Optional: attach the image digest as an asset (purely cosmetic)
+          files: |
+            ${{ steps.image.outputs.image }}.tar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
