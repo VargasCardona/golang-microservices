@@ -3,13 +3,13 @@ name: CI/CD – Test, Scan, Build & Release
 on:
   push:
     tags:
-      - 'v*.*.*'          # Only on version tags: v1.0.0, v2.1.3, etc.
+      - 'v*.*.*'
   pull_request:
     branches: [ main ]
 
 permissions:
-  contents: write       # For creating releases
-  packages: write       # For pushing to GHCR
+  contents: write
+  packages: write
 
 jobs:
   test:
@@ -65,7 +65,9 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t ghcr.io/${{ github.repository }}:${{ github.ref_name }} .
+          SANITIZED_REPO=$(echo "${{ github.repository }}" | sed 's/-/\_/g')
+          IMAGE=ghcr.io/$SANITIZED_REPO:${{ github.ref_name }}
+          docker build -t $IMAGE .
 
       - name: Run Trivy
         uses: aquasecurity/trivy-action@master
@@ -74,7 +76,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1'           # Fail on HIGH/CRITICAL
+          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
 
@@ -87,7 +89,7 @@ jobs:
     name: Build & Release Docker Image
     needs: trivy-scan
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')  # Only on tags
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -106,7 +108,8 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          IMAGE=ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.version }}
+          SANITIZED_REPO=$(echo "${{ github.repository }}" | sed 's/-/\_/g')
+          IMAGE=ghcr.io/$SANITIZED_REPO:${{ steps.tag.outputs.version }}
           docker build -t $IMAGE .
           docker push $IMAGE
           echo "Pushed $IMAGE"
@@ -116,13 +119,5 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.version }}
           name: Release ${{ steps.tag.outputs.version }}
-          body: |
-            **Docker Image**: `ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.version }}`
-
-            ### Features
-            - Full CRUD API (`POST /guitars`, `GET /guitars`, etc.)
-            - PostgreSQL + GORM
-            - Trivy-scanned (no HIGH/CRITICAL vulnerabilities)
-
-            ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.version }}
+          draft: false
+          prerelease: false
