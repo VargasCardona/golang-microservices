@@ -29,7 +29,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -63,16 +62,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set sanitized image name
+        id: image
+        run: |
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | sed 's/-/\_/g')
+          TAG=${{ github.ref_name }}
+          IMAGE_NAME="ghcr.io/$REPO:$TAG"
+          echo "image=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "Scanning image: $IMAGE_NAME"
+
       - name: Build Docker image
         run: |
-          SANITIZED_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | sed 's/-/\_/g')
-          IMAGE=ghcr.io/$SANITIZED_REPO:${{ github.ref_name }}
-          docker build -t $IMAGE .
+          docker build -t ${{ steps.image.outputs.image }} .
 
       - name: Run Trivy
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'ghcr.io/${{ github.repository }}:${{ github.ref_name }}'
+          image-ref: ${{ steps.image.outputs.image }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -97,7 +103,17 @@ jobs:
       - name: Extract version from tag
         id: tag
         run: |
-          echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set sanitized image name
+        id: image
+        run: |
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | sed 's/-/\_/g')
+          VERSION=${{ steps.tag.outputs.version }}
+          IMAGE_NAME="ghcr.io/$REPO:$VERSION"
+          echo "image=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "Building and pushing: $IMAGE_NAME"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -108,11 +124,9 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          SANITIZED_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | sed 's/-/\_/g')
-          IMAGE=ghcr.io/$SANITIZED_REPO:${{ steps.tag.outputs.version }}
-          docker build -t $IMAGE .
-          docker push $IMAGE
-          echo "Pushed $IMAGE"
+          docker build -t ${{ steps.image.outputs.image }} .
+          docker push ${{ steps.image.outputs.image }}
+          echo "Pushed ${{ steps.image.outputs.image }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
