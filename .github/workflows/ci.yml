@@ -1,0 +1,101 @@
+name: CI – Test, Coverage & Security
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-coverage:
+    name: Go Test + Coverage
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: guitar_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      - name: Run tests with coverage
+        env:
+          DATABASE_URL: host=localhost user=postgres password=secret dbname=guitar_db sslmode=disable
+        run: |
+          go test -v -covermode=atomic -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tee coverage.txt
+
+      - name: Check coverage threshold (80%)
+        run: |
+          TOTAL=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Coverage: $TOTAL%"
+          if (( $(echo "$TOTAL < 80" | bc -l) )); then
+            echo "Coverage below 80%!"
+            exit 1
+          fi
+
+      - name: Upload coverage to Codecov (optional)
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: coverage.out
+          fail_ci_if_error: true
+
+  trivy-scan:
+    name: Trivy Docker Image Scan
+    needs: test-and-coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t guitar-service:latest .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'guitar-service:latest'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'  # Fail on HIGH/CRITICAL
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
